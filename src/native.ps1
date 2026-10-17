@@ -9,7 +9,12 @@ $ProgressPreference='SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -Path (Join-Path $PSScriptRoot 'desktop-guard.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'consent-focus.cs')
+. (Join-Path $PSScriptRoot 'desktop-policy.ps1')
 $script:baseline=$null
+$script:guardBaseline=$null
+$script:guardLocked=$false
+$script:preflightRebases=0
+$script:lastGuardFailure=$null
 $script:focusPolicy=$null
 $script:consentFocusStart=0
 $script:browserPid=0
@@ -35,8 +40,9 @@ function Get-BrowserRoots {
     $roots=@(Get-Roots | Where-Object { $_.Current.ClassName -eq 'MozillaWindowClass' -and @(Find-ById $_ 'TabsToolbar' -Children).Count -eq 1 })
     # Modal consent can remove its owner from UIA's desktop-children enumeration.
     # Read the already verified HWND directly; this does not activate the window.
-    if($script:baseline) {
-        foreach($window in $script:baseline.windows) {
+    $knownSnapshot=if($script:guardBaseline){$script:guardBaseline}else{$script:baseline}
+    if($knownSnapshot) {
+        foreach($window in $knownSnapshot.windows) {
             $handle=[IntPtr][long]$window.hwnd
             if(@($roots | Where-Object { [long]$_.Current.NativeWindowHandle -eq $handle.ToInt64() }).Count -gt 0 -or -not [NightlyDesktop]::IsWindow($handle)) { continue }
             $ownerPid=[uint32]0
@@ -65,11 +71,14 @@ function Get-Snapshot {
         $strip=@(Find-ById $toolbar[0] 'tabbrowser-tabs')
         if($strip.Count -ne 1) { throw 'F_OBSERVER_UNAVAILABLE' }
         $tabCondition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::TabItem)
-        $selected=@($strip[0].FindAll([System.Windows.Automation.TreeScope]::Descendants,$tabCondition) | Where-Object {
-            ([System.Windows.Automation.SelectionItemPattern]$_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Current.IsSelected
+        $tabs=@(foreach($tab in $strip[0].FindAll([System.Windows.Automation.TreeScope]::Descendants,$tabCondition)) {
+            $isSelected=([System.Windows.Automation.SelectionItemPattern]$tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Current.IsSelected
+            $runtimeId=''
+            if($isSelected) { try { $runtimeId=$tab.GetRuntimeId() -join ':' } catch { } }
+            @{automationId=[string]$tab.Current.AutomationId;runtimeId=$runtimeId;selected=$isSelected}
         })
-        if($selected.Count -ne 1) { throw 'F_OBSERVER_UNAVAILABLE' }
-        $windows+=@{ hwnd=$handle.ToInt64().ToString(); minimized=[NightlyDesktop]::IsIconic($handle); bounds=@($rect.Left,$rect.Top,$rect.Right,$rect.Bottom); selectedTab=($selected[0].GetRuntimeId() -join ':') }
+        $selection=Get-TabSelection $tabs
+        $windows+=@{ hwnd=$handle.ToInt64().ToString(); minimized=[NightlyDesktop]::IsIconic($handle); bounds=@($rect.Left,$rect.Top,$rect.Right,$rect.Bottom); selectedTab=$selection.runtimeId; selectedTabKey=$selection.key; selectedTabIdentityKind=$selection.kind; selectedTabPosition=$selection.position }
     }
     if($windows.Count -eq 0) { throw 'F_BROWSER_NOT_FOUND' }
     return @{ foreground=[NightlyDesktop]::GetForegroundWindow().ToInt64().ToString(); clipboardSequence=[NightlyDesktop]::GetClipboardSequenceNumber(); windows=@($windows | Sort-Object hwnd) }
@@ -78,14 +87,28 @@ function Get-GuardReport {
     $after=Get-Snapshot
     $events=@([NightlyDesktop]::ForegroundEvents())
     $baseline=$script:baseline
+    $comparison=Compare-DesktopSnapshot $script:guardBaseline $after
+    $targetWindows=@($after.windows | ForEach-Object { [long]$_.hwnd }) + @($events | Where-Object { $_.Process -eq $script:browserPid } | ForEach-Object Window)
+    $foregroundOwner=[uint32]0
+    $null=[NightlyDesktop]::GetWindowThreadProcessId([IntPtr][long]$after.foreground,[ref]$foregroundOwner)
+    if($foregroundOwner -eq $script:browserPid) { $targetWindows+=@([long]$after.foreground) }
     return @{
         foregroundStable=($after.foreground -eq $baseline.foreground -and @($events | Where-Object { $_.Window.ToString() -ne $baseline.foreground }).Count -eq 0)
         clipboardStable=($after.clipboardSequence -eq $baseline.clipboardSequence)
-        windowsStable=(($after.windows | ConvertTo-Json -Compress -Depth 5) -ceq ($baseline.windows | ConvertTo-Json -Compress -Depth 5))
-        windowIdentityStable=(($after.windows.hwnd -join ':') -ceq ($baseline.windows.hwnd -join ':'))
-        selectedTabsStable=(($after.windows | ForEach-Object { "$($_.hwnd)=$($_.selectedTab)" }) -join ',') -ceq (($baseline.windows | ForEach-Object { "$($_.hwnd)=$($_.selectedTab)" }) -join ',')
+        windowsStable=$comparison.windowsStable
+        windowIdentityStable=$comparison.windowIdentityStable
+        windowGeometryStable=$comparison.windowGeometryStable
+        selectedTabsStable=$comparison.selectedTabsStable
+        tabProviderIdentityStable=$comparison.tabProviderIdentityStable
+        desktopChanges=$comparison.reasons
+        initialWindowsStable=(Compare-DesktopSnapshot $baseline $after).windowsStable
+        clipboardPolicy='observe-only'
+        guardLocked=$script:guardLocked
+        preflightRebases=$script:preflightRebases
+        lastFailure=$script:lastGuardFailure
         foregroundWithinConsentPolicy=$script:focusPolicy.AllowsConsentOnly([long[]]@($events | ForEach-Object Window),[long]$after.foreground)
         foregroundWithinControlPolicy=$script:focusPolicy.Allows([long[]]@($events | ForEach-Object Window),[long]$after.foreground)
+        browserForegroundWithinControlPolicy=$script:focusPolicy.AllowsForWindows([long[]]@($events | ForEach-Object Window),[long]$after.foreground,[long[]]$targetWindows)
         consentFocusActive=($script:focusPolicy.Active -and -not $script:focusPolicy.ServiceStartActive)
         serviceStartFocusActive=$script:focusPolicy.ServiceStartActive
         consentActivationDefault=$true
@@ -97,9 +120,36 @@ function Get-GuardReport {
         lastInvocationIssued=$script:lastInvocationIssued
     }
 }
-function Assert-Desktop {
+function Assert-Desktop([switch]$PassThru) {
     $report=Get-GuardReport
-    if(-not $report.clipboardStable -or -not $report.windowsStable -or -not $report.foregroundWithinControlPolicy) { throw 'F_DESKTOP_CHANGED' }
+    if(-not $report.windowsStable -or -not $report.browserForegroundWithinControlPolicy) {
+        $reasons=@($report.desktopChanges)
+        if(-not $report.browserForegroundWithinControlPolicy) { $reasons+='browser-focus' }
+        $script:lastGuardFailure=@{reasons=$reasons;windowIdentityStable=$report.windowIdentityStable;windowGeometryStable=$report.windowGeometryStable;selectedTabsStable=$report.selectedTabsStable;clipboardStable=$report.clipboardStable;browserForegroundWithinControlPolicy=$report.browserForegroundWithinControlPolicy}
+        throw 'F_DESKTOP_CHANGED'
+    }
+    if($PassThru) { return $report }
+}
+function Prepare-Desktop {
+    if($script:guardLocked) { return }
+    # Settle only before any owned UI action or connection. Never retry tasks,
+    # replay a native invocation, or erase an already protected interval.
+    $previous=Get-Snapshot
+    for($attempt=0;$attempt -lt 3;$attempt++) {
+        Start-Sleep -Milliseconds 50
+        $current=Get-Snapshot
+        $comparison=Compare-DesktopSnapshot $previous $current
+        if($comparison.windowsStable) {
+            if(-not (Compare-DesktopSnapshot $script:guardBaseline $current).windowsStable) { $script:preflightRebases++ }
+            $script:guardBaseline=$current
+            $script:focusPolicy.SetCheckpoint(@([NightlyDesktop]::ForegroundEvents()).Count,[long]$current.foreground)
+            $script:guardLocked=$true
+            return
+        }
+        $previous=$current
+    }
+    $script:lastGuardFailure=@{reasons=@('preparation-unstable')+@($comparison.reasons)}
+    throw 'F_DESKTOP_UNSTABLE'
 }
 function Begin-ConsentFocus($Dialog,[int]$EventIndex) {
     if($Dialog.Current.ClassName -ne 'MozillaDialogClass' -or $Dialog.Current.AutomationId -ne 'commonDialogWindow' -or $Dialog.Current.ProcessId -ne $script:browserPid) { throw 'F_CONSENT_SHAPE_UNKNOWN' }
@@ -165,6 +215,7 @@ function Invoke-Native($Element) {
     Assert-Desktop
 }
 function Set-Power([bool]$Enabled) {
+    Prepare-Desktop
     $root=Get-TargetRoot
     if($script:focusPolicy.Active) { throw 'F_CONSENT_NOT_CLOSED' }
     if([NightlyDesktop]::IsIconic([IntPtr]$root.Current.NativeWindowHandle)) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
@@ -292,6 +343,7 @@ function Cancel-Consent {
 function Close-ResetConsent {
     # Only explicit session reset calls this, and only Firefox's native remote
     # connection consent is eligible. WM_CLOSE denies it without mouse/focus.
+    Prepare-Desktop
     Assert-Desktop
     $dialogs=@(Get-ConsentDialogs)
     if($dialogs.Count -gt 1) { throw 'F_CONSENT_AMBIGUOUS' }
@@ -322,6 +374,7 @@ try {
     $script:browserCreated=$candidates[0].CreationDate.ToUniversalTime().ToString('o')
     [NightlyDesktop]::Start()
     $script:baseline=Get-Snapshot
+    $script:guardBaseline=$script:baseline
     $script:focusPolicy=[ConsentFocusPolicy]::new([long]$script:baseline.foreground)
     @{ ready=$true } | ConvertTo-Json -Compress
     [Console]::Out.Flush()
@@ -335,6 +388,7 @@ try {
                 'closeResetConsent' { Close-ResetConsent }
                 'power' { Set-Power ([bool]$request.enabled) }
                 'beginConsent' {
+                    Prepare-Desktop
                     Assert-Desktop
                     if(@(Get-ConsentDialogs).Count -gt 0) { throw 'F_CONSENT_ALREADY_PRESENT' }
                     $script:consentArmed=$true; $script:consentInvoked=$false; $script:consentSeen=$false; $script:consentDialogHandle=0
@@ -344,7 +398,7 @@ try {
                 'pollConsent' { Poll-Consent }
                 'cancelConsent' { Cancel-Consent }
                 'endConsent' { Finish-ConsentFocus; $script:consentArmed=$false; @{ ended=$true } }
-                'assert' { Assert-Desktop; Get-GuardReport }
+                'assert' { Prepare-Desktop; Assert-Desktop -PassThru }
                 'report' { Get-GuardReport }
                 default { throw 'F_INVALID_NATIVE_OPERATION' }
             }

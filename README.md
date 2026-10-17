@@ -101,7 +101,7 @@ New-Item -ItemType Junction -Path $skillTarget -Target $skillSource
 
 默认直接开启 Remote Control，允许开启服务的原生控件操作引起目标主窗口激活，无需另行确认。本次连接对应的原生确认框也默认自动批准。页面任务和关闭服务保持后台；最小化或原生控件不可用时返回失败。当前任务明确要求严格后台时，以该要求为准。业务操作仍以当前任务授权为准。
 
-工具观察窗口、选中标签和剪贴板变化，不使用系统键鼠或主动激活主窗口作为回退。JSON 输出与错误码见[使用参考](docs/reference.md#输出和失败处理)，运行报告保存在已忽略的 `.local/runs/`。
+连接前自动取得稳定基线；UIA 控件 ID 重建和用户复制内容不再中止连接。锁定后真实的窗口、标签或未授权焦点变化仍会阻止操作，失败原因写入 `background.lastFailure.reasons`。JSON 字段与边界见[使用参考](docs/reference.md#连接前稳定性检查)，报告保存在已忽略的 `.local/runs/`。
 
 ## 开发与许可
 

@@ -1,5 +1,29 @@
 # 验证记录
 
+## 连接前稳定性误判修复（2026-10-18）
+
+当前工作区修复了三类误判：将 UIA Runtime ID 当作长期标签身份、用初始化快照约束尚未开始的连接准备，以及把用户复制内容视作失败。历史报告中的布尔值不够区分真实标签切换与控件重建，不能据此断言原始运行一定是用户切换了标签。
+
+- 首次原生动作或连接前最多四次稳定采样，锁定基线后不再重新采纳变化。准备阶段持续不稳定返回 F_DESKTOP_UNSTABLE，不重放原生动作或页面任务。
+- 标签使用 tab strip 内唯一 AutomationId，缺失或重复时比较选中位置；Runtime ID 保留为诊断字段。窗口逐字段、按 HWND 比较，不依赖 JSON 字段顺序。
+- 剪贴板序号继续原样报告，clipboardPolicy=observe-only；不读取或写入剪贴板内容，不因用户复制而终止。
+- lastFailure.reasons 保留实际触发项；一次 assert 返回其实际验证的同一份快照，减少重复读取和报告竞态。
+- 新回归先在旧实现复现 Runtime ID 和剪贴板误判，再覆盖实际 beginConsent/assert 分发、稳定采样、已锁定基线保护、真实窗口/标签变化、AutomationId 缺失/重复、外部应用及焦点区间。本次提交快照的完整 Node 回归 **113 项通过，零失败、取消或跳过**；Python TCP fixture **4 项通过**。PowerShell 解析和 skill 元数据校验通过。
+- 已对当前 Nightly 运行只读原生窗口采样与准备检查，initialize/assert 均成功，guardLocked=true、lastFailure=null、lastInvocationIssued=false。未建立 BiDi 连接、读取页面、点击控件、重启浏览器或修改浏览器设置；完整连接与页面业务实测未在本次执行。
+
+skill 与项目操作规则已同步，两个安装入口仍为指向唯一源目录的 Junction。本节记录本次测试范围，提交与发布状态以 Git 历史为准。
+
+## 默认连接授权与其他应用活动（2026-10-17）
+
+用户明确授权：要求使用、开启或连接 Remote Control 即包含自动开启服务和批准本次原生 Allow，不拆分权限提问。原 skill 已原地更新，全局 Junction 与源文件 SHA-256 一致；skill 元数据校验通过。
+
+排查实际连接失败发现，用户切换其他应用会使原全桌面前台检查在 `beginConsent` 前返回 `F_DESKTOP_CHANGED`。现在新增 `browserForegroundWithinControlPolicy`，只对目标 Nightly 的窗口检查服务开启/自身确认框两个例外，并保留原始前台事件索引及全桌面字段。窗口、选中标签和剪贴板检查保留。其他应用活动不被误判为工具抢占浏览器；记录仍能显示原始前台发生变化。
+
+- Node 测试 82 项全部通过，新增 9 项实际 C# 策略检查覆盖其他应用活动、原始事件保留和非法浏览器激活仍被拒绝。
+- PowerShell parser 检查通过。
+- 已通过真实 Nightly 160.0a1 的自动原生确认及 BiDi 握手，在新建后台 ChatGPT 页面核实用户脚本 1.11.0 实际运行；该阶段原生 Allow 的 invoked/closed 均为 true，前台、选中标签及剪贴板观察均稳定。
+- 本次为本机修改与验收，不代表已 Git 提交或发布。具体业务归档验证由对应用户脚本项目维护。
+
 ## 本地默认开启策略更新（2026-10-17）
 
 用户授权默认直接开启已有 Nightly 的 Remote Control。当前实现接受开启服务原生控件引起的目标窗口激活；页面任务、关闭服务及其他桌面状态检查保持原约束。以下记录属于本地修改，不代表已提交或发布的版本。

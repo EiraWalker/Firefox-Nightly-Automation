@@ -38,9 +38,27 @@ Nightly 安装未签名包的前提是用户已将 `xpinstall.signatures.require
 
 明确授权 reset 时可以用 WM_CLOSE 取消目标 Nightly 中一个已匹配的原生远程连接确认框，再清理共享会话。确认框关闭引起的焦点回返归入确认框处理区间；结构或归属不明确时拒绝。普通任务不能借此取消其他客户端的请求。
 
-WinEventHook 连续记录前台切换。开启服务区间仅允许已核对目标主窗口和原先前台；已匹配确认框区间允许该确认框及其对应浏览器或原先前台。其他窗口、其他确认框、区间之外的焦点变化均不豁免。浏览器窗口位置/最小化状态、窗口集合、选中标签 runtime ID 和剪贴板序号始终必须保持稳定，否则返回 `F_DESKTOP_CHANGED`。
+WinEventHook 连续记录前台切换。开启服务区间仅允许已核对目标主窗口；已匹配确认框区间允许该确认框及其对应浏览器。锁定后其他 Nightly 窗口、其他确认框、区间之外的浏览器焦点变化均不豁免。用户在其他应用中的前台切换保留在原始观察中，不阻止后台连接。
 
-`background.foregroundStable` 保留完整原始观察；`foregroundWithinControlPolicy` 汇总开启服务和确认框两种例外，`foregroundWithinConsentPolicy` 保留仅确认框的检查，因此开启服务激活窗口后，前者可为 true 而后者为 false。`consentFocusActive`、`serviceStartFocusActive` 分别表示两种区间是否仍开启，`mainWindowActivationAllowed` 仅在开启服务区间为 true。报告标明 consentActivationDefault=true、serviceStartActivationDefault=true。只读 status 不激活窗口；当前实测见 [验证记录](../VALIDATION.md)。
+### 连接前稳定性检查
+
+首次原生控件动作或创建连接前，适配器最多读取四次窗口快照，相邻采样至少间隔 50ms。取得连续一致的窗口集合、位置、最小化状态和选中标签后，锁定检查基线。此前用户已完成的窗口调整和标签切换可以作为当前状态；锁定后不再更新基线，不重新执行连接、点击或页面任务。持续变化返回 `F_DESKTOP_UNSTABLE`，保留准备阶段的失败原因。
+
+选中标签优先使用 tab strip 内唯一的 AutomationId；缺失或重复时使用选中位置。任务模块仍须按实际完整 URL/标题复核业务目标，不能把位置当作页面身份。UIA Runtime ID 仅用于诊断控件重建，不再单独判定用户切换标签；其语义见 [Microsoft GetRuntimeId](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement.getruntimeid)。窗口字段逐项比较，不依赖 JSON 对象字段或枚举顺序。
+
+| 字段 | 含义 |
+| --- | --- |
+| `windowsStable` / `selectedTabsStable` | 相对已锁定基线的窗口与标签状态 |
+| `initialWindowsStable` | 相对进程初始化时快照的原始观察，可能因准备阶段合法变动为 false |
+| `tabProviderIdentityStable` | UIA Runtime ID 是否一致，仅诊断 |
+| `clipboardStable` / `clipboardPolicy` | 原始剪贴板序号是否一致；策略为 observe-only，不因用户复制而失败 |
+| `desktopChanges` | 最新快照中的具体变化项 |
+| `lastFailure.reasons` | 触发失败那一刻的原因，不会被后续状态读取覆盖 |
+| `preflightRebases` / `guardLocked` | 是否采纳过准备阶段变化，以及基线是否已锁定 |
+
+锁定后的窗口增减、位置、最小化、选中标签及未授权浏览器焦点变化仍返回 `F_DESKTOP_CHANGED`。原因分别为 `window-set`、`window-position`、`window-minimized`、`tab-selection`、`browser-focus`；不收集标题、URL、正文或剪贴板内容。
+
+`background.foregroundStable` 保留完整原始观察；`foregroundWithinControlPolicy` 汇总开启服务和确认框两种例外，`foregroundWithinConsentPolicy` 保留仅确认框的检查，因此开启服务激活窗口后，前者可为 true 而后者为 false。2026-10-17 起新增 `browserForegroundWithinControlPolicy`，按目标 Nightly 的窗口及原始事件索引判断这两种例外，作为前台检查的执行依据；用户切换其他应用只记录，不再导致连接前失败。原始字段仍可能为 false，不能据此宣称整段桌面前台不变。`consentFocusActive`、`serviceStartFocusActive` 分别表示两种区间是否仍开启，`mainWindowActivationAllowed` 仅在开启服务区间为 true。报告标明 consentActivationDefault=true、serviceStartActivationDefault=true。只读 status 不激活窗口；当前实测见 [验证记录](../VALIDATION.md)。
 
 当前原生适配器只接受已核对的 Nightly 160.0a1 英文控件结构。其他结构、语言或升级后无法识别时返回明确错误，不改用坐标点击。Nightly 原生面板的初始配置 `remote.experimental.dynamicstart.enabled=true` 属于已有浏览器准备；本工具不改 profile 或 about:config。
 
@@ -56,7 +74,8 @@ stdout 输出 JSON，成功 `ok:true`、退出码 0；失败 `ok:false`、退出
 | --- | --- |
 | F_BACKGROUND_CONTROL_UNAVAILABLE | 开关或按钮最小化、不可见或不支持后台 Invoke |
 | F_BACKGROUND_PANEL_UNAVAILABLE | 无法在后台取得原生面板 |
-| F_DESKTOP_CHANGED | 确认框例外之外的焦点变化，或浏览器窗口/选中标签/剪贴板变化 |
+| F_DESKTOP_CHANGED | 锁定后窗口、选中标签或未授权浏览器焦点变化，具体见 lastFailure.reasons |
+| F_DESKTOP_UNSTABLE | 连接准备阶段未取得连续稳定快照，尚未执行原生动作 |
 | F_CONSENT_ALREADY_PRESENT / F_CONSENT_AMBIGUOUS | 授权框归属不明确，不点击 |
 | F_CONSENT_SHAPE_UNKNOWN | 弹窗不是受支持的原生结构 |
 | F_SESSION_BUSY | Firefox 已有其他调试会话，不接管 |

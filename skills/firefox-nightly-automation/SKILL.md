@@ -13,7 +13,9 @@ node -e "const fs=require('node:fs'),p=require('node:path');console.log(p.resolv
 
 核对根目录存在 `cli.mjs` 和 `package.json`，之后以其绝对路径调用。定义见工具根目录的 GLOSSARY.md；调用及实测边界见 README.md 和 VALIDATION.md。
 
-用户已授权本工具默认直接开启已有 Nightly 的 Remote Control，无需再次确认或要求用户手动开启。服务未开启时，直接执行 `run` 或 `start`；接受开启服务的原生工具栏、面板操作引起的目标主窗口激活。此例外仅覆盖开启服务的步骤，其他页面操作继续在后台执行。本次连接自己的原生确认框也默认自动批准，并接受该确认框引起的激活。连接授权不包含发送消息、安装扩展、写入存储等业务操作；仅计划或讨论时不实际连接。若用户在当前任务明确要求严格后台、不抢焦点，则以该要求为准；服务关闭时先报告无法满足，不触发开启步骤。
+用户已授权本工具默认直接开启已有 Nightly 的 Remote Control，无需再次确认或要求用户手动开启。2026-10-17 明确补充：用户要求使用、开启或连接 Firefox Remote Control，就同时授权 Agent 自行完成服务开启和本次连接的原生 Allow 确认；不得把同一连接的开启与确认拆成两次权限提问，也不要求用户手动点击。直接使用 `run` 或 `start` 的默认自动确认流程。
+
+接受开启服务的原生工具栏、面板操作及已匹配的本次连接确认框引起的目标窗口激活；页面任务继续在后台执行。历史“后台操作”要求本身不撤销上述连接准备授权；只有用户在当前任务明确禁止服务开启/确认框激活或自动确认时，才按该次限制执行。连接授权不代替发送消息、安装扩展、写入存储等业务任务的授权；已有任务授权则持续执行，不为每个必要步骤反复确认。仅计划或讨论时不实际连接。
 
 先 `node '<入口>' status`。选择明确的已有 Nightly；多窗口时指定实际 HWND。不要启动替代浏览器、刷新现有页面或更改 Firefox profile。
 
@@ -31,6 +33,8 @@ node -e "const fs=require('node:fs'),p=require('node:path');console.log(p.resolv
 
 当前 Nightly 160.0a1 的原生 Allow 会产生前台事件；这属于本次连接确认框的默认许可，与开启服务的窗口激活例外分别检查。consentAutomationAvailable=true。只匹配 Nightly 中桌面顶层或浏览器直接子节点的原生确认框，并核对完整说明、Allow/Deny 和未勾选复选框；拒绝已有或多个确认框。始终不勾选记住决定、不关闭授权偏好、不使用坐标或 OS 键鼠。
 
-读取 JSON 的 `ok`、退出码、`handshake`、`consent.seen/invoked/closed` 和 `background`，不要把端口监听、Invoke 被调用、离线测试当成真实验收通过。foregroundStable 保留原始观察；foregroundWithinControlPolicy 检查开启服务和本次确认框两种焦点例外，foregroundWithinConsentPolicy 只检查确认框例外。完成后 consentFocusActive 和 serviceStartFocusActive 应为 false。两种例外区间之外的焦点变化，以及任何浏览器窗口位置/最小化、选中标签或剪贴板变化均失败；报告具体错误。最小化或原生控件不可用时报告失败，不自行恢复窗口。明确授权 reset 之外不关闭其他会话。
+读取 JSON 的 `ok`、退出码、`handshake`、`consent.seen/invoked/closed` 和 `background`，不要把端口监听、Invoke 被调用、离线测试当成真实验收通过。foregroundStable、foregroundWithinControlPolicy、foregroundWithinConsentPolicy 保留原始前台观察；browserForegroundWithinControlPolicy 判断连接准备的焦点例外。用户切换其他应用只记录，不阻止连接。首次原生动作或连接前，工具内部最多采样四次，取得连续稳定的窗口与选中标签后锁定检查基线；此前用户切换标签或调整窗口可被采纳，不归因于工具。锁定后不重新采纳变化，不自动重放动作或页面任务。
 
-`F_DESKTOP_CHANGED` 表示观察到变化，无法确定一定来自工具；报告本次不干扰验收未通过，不强行恢复窗口。原始报告位于项目 `.local/runs/`，不收集无关网页正文或凭据。
+标签使用 tab strip 内唯一 AutomationId，无唯一 ID 时使用选中位置；UIA Runtime ID 变化仅反映在 tabProviderIdentityStable，不单独判定切换。clipboardPolicy=observe-only，clipboardStable=false 仅表示剪贴板序号变化，不能据此中止或宣称工具写入。任务仍须按完整 URL/标题确认目标；不要用标签位置代替业务目标校验。完成后 consentFocusActive 和 serviceStartFocusActive 应为 false。
+
+`F_DESKTOP_UNSTABLE` 表示四次准备采样仍无法取得连续稳定状态，工具尚未执行原生动作；报告准备未完成，不循环重试。`F_DESKTOP_CHANGED` 表示锁定后检测到窗口集合、位置、最小化、选中标签或未授权的目标浏览器焦点变化；优先读取 background.lastFailure.reasons，区分 window-set、window-position、window-minimized、tab-selection、browser-focus，不笼统声称窗口和标签都变了。当前 desktopChanges 是最新观察，lastFailure 保留触发时原因。保留错误，不强行恢复窗口或清除其他会话。原始报告位于 `.local/runs/`，不收集页面内容或凭据。

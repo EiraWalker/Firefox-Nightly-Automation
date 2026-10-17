@@ -11,6 +11,8 @@ public sealed class ConsentFocusPolicy {
     }
     readonly long initialForeground;
     readonly List<Interval> intervals = new List<Interval>();
+    int checkpointIndex;
+    long? checkpointForeground;
     public ConsentFocusPolicy(long initialForeground) { this.initialForeground = initialForeground; }
     public bool Active { get { return intervals.Count > 0 && intervals[intervals.Count - 1].End < 0; } }
     public bool ServiceStartActive { get { return Active && intervals[intervals.Count - 1].ServiceStart; } }
@@ -39,23 +41,39 @@ public sealed class ConsentFocusPolicy {
     public bool AllowsConsentOnly(long[] events, long foreground) {
         return Allows(events, foreground, false);
     }
-    bool Allows(long[] events, long foreground, bool includeServiceStart) {
-        int cursor = 0;
-        long expected = initialForeground;
+    public bool AllowsForWindows(long[] events, long foreground, long[] targetWindows) {
+        return Allows(events, foreground, true, new HashSet<long>(targetWindows), checkpointIndex, checkpointForeground);
+    }
+    // Only idle preparation can establish a checkpoint. An owned UI action or
+    // consent interval must never be hidden by adopting a later foreground.
+    public void SetCheckpoint(int eventIndex, long foreground) {
+        if (eventIndex < 0 || intervals.Count != 0) throw new Exception("F_CONTROL_CHECKPOINT_INVALID");
+        checkpointIndex = eventIndex;
+        checkpointForeground = foreground;
+    }
+    static bool Relevant(long window, HashSet<long> targetWindows) {
+        return targetWindows == null || targetWindows.Contains(window);
+    }
+    bool Allows(long[] events, long foreground, bool includeServiceStart, HashSet<long> targetWindows = null, int startEvent = 0, long? startForeground = null) {
+        if (startEvent < 0 || startEvent > events.Length) return false;
+        int cursor = startEvent;
+        long expected = startForeground ?? initialForeground;
         foreach (var interval in intervals) {
             if (interval.ServiceStart && !includeServiceStart) continue;
             if (interval.Start > events.Length) return false;
-            for (; cursor < interval.Start; cursor++) if (events[cursor] != expected) return false;
+            for (; cursor < interval.Start; cursor++) if (Relevant(events[cursor], targetWindows) && events[cursor] != expected) return false;
             int end = interval.End < 0 ? events.Length : interval.End;
             if (end > events.Length) return false;
             for (; cursor < end; cursor++)
-                if (events[cursor] != expected && events[cursor] != interval.Dialog && events[cursor] != interval.Parent) return false;
+                if (Relevant(events[cursor], targetWindows) && events[cursor] != expected && events[cursor] != interval.Dialog && events[cursor] != interval.Parent) return false;
             if (interval.End < 0)
-                return foreground == expected || foreground == interval.Dialog || foreground == interval.Parent;
-            if (interval.After != expected && interval.After != interval.Parent) return false;
-            expected = interval.After;
+                return !Relevant(foreground, targetWindows) || foreground == expected || foreground == interval.Dialog || foreground == interval.Parent;
+            if (Relevant(interval.After, targetWindows)) {
+                if (interval.After != expected && interval.After != interval.Parent) return false;
+                expected = interval.After;
+            }
         }
-        for (; cursor < events.Length; cursor++) if (events[cursor] != expected) return false;
-        return foreground == expected;
+        for (; cursor < events.Length; cursor++) if (Relevant(events[cursor], targetWindows) && events[cursor] != expected) return false;
+        return !Relevant(foreground, targetWindows) || foreground == expected;
     }
 }

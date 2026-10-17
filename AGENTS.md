@@ -11,8 +11,11 @@
 - 测试示例只读取浏览器元数据。用户页面业务操作需要该任务本身授权。
 - 用户授权安装扩展时，默认 `node cli.mjs install --xpi '<绝对路径.xpi>'` 永久安装；只有明确要求临时测试才临时加载。检查 installation.status：active 才表示版本正确、启用且非临时；restart-required 表示归档已装入、临时副本仍占位。正常重启后重试，不自动重启或卸载临时副本清理数据。不改签名偏好，不回退临时安装。包已安装后的其他失败须检查 completedStages，避免误报未发生安装。
 - 私有诊断、服务归属和运行报告写入忽略的 `.local/`，不记录页面内容或凭据。
+- 用户要求使用、开启或连接 Remote Control，默认包含 Agent 自动开启服务和批准本次连接的原生 Allow，不拆分权限提问。连接准备与页面业务权限分别判断，已有业务授权不逐步重问。
+- 原始全桌面前台事件继续报告；`browserForegroundWithinControlPolicy` 对目标 Nightly 判断焦点例外。首次原生动作或连接前最多四次稳定采样，随后锁定基线；锁定后不采纳变化、不重放动作或任务。窗口与选中标签比较集中在 `src/desktop-policy.ps1`，不比较无序 JSON。
+- 标签以 tab strip 内唯一 AutomationId 或选中位置识别，Runtime ID 仅诊断；剪贴板序号是 observe-only，用户复制内容不阻止连接。任务必须独立复核完整 URL/标题。失败依据 lastFailure.reasons，不能把 clipboardStable=false 或 Runtime ID 变化当作操作失败。
 - 需要 Node 22.12+ 与 PowerShell 7；用 `npm ci --ignore-scripts --cache .local/npm-cache` 安装锁定依赖。
 - 会话重置使用本目录 .venv 的 Mozilla marionette-driver；requirements.txt 锁定版本/哈希。`reset-session --reset-existing` 只有明确重置授权时调用。
-- 焦点变化例外分别覆盖开启 Remote Control 的原生控件操作和已匹配本次连接确认框的处理区间。每个区间仅允许已核对的目标窗口，区间之外继续检查后台约束；所有浏览器窗口位置、最小化状态、选中标签和剪贴板检查持续有效。foregroundWithinControlPolicy 汇总两种例外，foregroundWithinConsentPolicy 保留仅确认框的检查；原始前台事件仍保留。
+- 焦点变化例外分别覆盖开启 Remote Control 和已匹配本次连接确认框。锁定后的窗口集合、位置、最小化、选中标签及区间外目标浏览器焦点变化仍会失败。foregroundWithinControlPolicy、foregroundWithinConsentPolicy 保留从初始化开始的原始检查；操作检查从稳定基线的事件索引开始，原始事件不删除。Prepare-Desktop 不得覆盖已有原生操作或确认框区间。
 - `restart --reset-existing` 默认清除共享会话；加 `--restart-service` 才关闭并重开原生 Remote Control 服务。普通任务不可用重置命令清除其他客户端；已有用户重置授权时不重复询问。
 - Python 传输回归：`.venv/Scripts/python.exe tests/session_reset_test.py`，只使用本机临时 TCP fixture，不连接真实浏览器。
