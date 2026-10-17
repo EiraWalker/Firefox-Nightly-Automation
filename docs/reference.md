@@ -30,17 +30,17 @@ Nightly 安装未签名包的前提是用户已将 `xpinstall.signatures.require
 
 ## 后台与授权范围
 
-原生控件通过 UI Automation InvokePattern 调用。主窗口和 Remote Control 面板不主动激活，不恢复最小化窗口；最小化或 offscreen 开关返回 `F_BACKGROUND_CONTROL_UNAVAILABLE`。本次已匹配确认框的 Allow 通过原生 Invoke 调用，接受该控件自身引起的确认框激活及焦点回返。没有 SetForegroundWindow、ShowWindow、宽泛窗口激活开关或主窗口恢复路径。不使用 OS 键鼠、剪贴板写入或浏览器进程重启。三个对象的定义见 [GLOSSARY](../GLOSSARY.md)。
+原生控件通过 UI Automation InvokePattern 调用。默认直接开启 Remote Control，接受开启步骤中原生控件引起的目标主窗口激活，无需另行确认。本次已匹配确认框的 Allow 也通过原生 Invoke 调用，接受确认框激活及焦点回返。最小化或 offscreen 开关仍返回 `F_BACKGROUND_CONTROL_UNAVAILABLE`；不恢复最小化窗口。没有 SetForegroundWindow、ShowWindow、宽泛窗口激活开关或主窗口恢复路径。不使用 OS 键鼠、剪贴板写入或浏览器进程重启。三个对象的定义见 [GLOSSARY](../GLOSSARY.md)。
 
-当前 Nightly 工具栏 Invoke 会激活所属主窗口，所以服务面板动作只在目标主窗口已经处于前台时尝试；其他应用处于前台则先返回后台不可用，不重复已知会抢焦点的操作。已经开启的服务可以直接进行协议重置和连接，本次确认框的默认 Allow 不受这项面板限制影响。
+开启服务时，工具先核对进程身份、目标 HWND 和原生工具栏状态，再记录限定于该目标窗口的焦点例外；完成或失败时关闭例外并继续审计全部事件。关闭服务仍要求目标主窗口已经处于前台，以保留后台清理约束。已经开启的服务可以直接连接。若当前任务明确要求严格后台、不抢焦点，调用方应先检查服务状态；关闭时不调用会自动开启服务的命令，并报告无法满足要求。
 
 连接确认只在本工具持有操作锁并创建一条连接时检查。拒绝预先存在或多个授权框，核对 Nightly 进程、原生 `MozillaDialogClass`/`commonDialogWindow`、完整固定说明、Allow/Deny 与记住决定复选框。支持桌面顶层和浏览器窗口直接子节点中的原生弹窗，不搜索网页。确认归属及原生结构后，默认调用原生 Allow，接受该动作引起的确认框激活及焦点回返，核对弹窗关闭及真实握手。复选框保持未勾选，不更改 Firefox 的授权偏好。
 
 明确授权 reset 时可以用 WM_CLOSE 取消目标 Nightly 中一个已匹配的原生远程连接确认框，再清理共享会话。确认框关闭引起的焦点回返归入确认框处理区间；结构或归属不明确时拒绝。普通任务不能借此取消其他客户端的请求。
 
-WinEventHook 连续记录前台切换。只有已匹配确认框的处理区间允许焦点进入该确认框，以及关闭后回到对应浏览器或原先前台。其他窗口、其他确认框、处理之前或之后的焦点变化均不豁免；后台面板调用仍受严格检查。浏览器窗口位置/最小化状态、窗口集合、选中标签 runtime ID 和剪贴板序号始终必须保持稳定，否则返回 `F_DESKTOP_CHANGED`。
+WinEventHook 连续记录前台切换。开启服务区间仅允许已核对目标主窗口和原先前台；已匹配确认框区间允许该确认框及其对应浏览器或原先前台。其他窗口、其他确认框、区间之外的焦点变化均不豁免。浏览器窗口位置/最小化状态、窗口集合、选中标签 runtime ID 和剪贴板序号始终必须保持稳定，否则返回 `F_DESKTOP_CHANGED`。
 
-`background.foregroundStable` 保留完整原始观察，不会因确认框例外变为 true；`foregroundWithinConsentPolicy` 表示焦点变化符合上述边界，`consentFocusActive` 标识确认框处理区间是否仍开启。报告固定标明 consentActivationDefault=true、mainWindowActivationAllowed=false。只读 status 不激活窗口；当前实测见 [验证记录](../VALIDATION.md)。
+`background.foregroundStable` 保留完整原始观察；`foregroundWithinControlPolicy` 汇总开启服务和确认框两种例外，`foregroundWithinConsentPolicy` 保留仅确认框的检查，因此开启服务激活窗口后，前者可为 true 而后者为 false。`consentFocusActive`、`serviceStartFocusActive` 分别表示两种区间是否仍开启，`mainWindowActivationAllowed` 仅在开启服务区间为 true。报告标明 consentActivationDefault=true、serviceStartActivationDefault=true。只读 status 不激活窗口；当前实测见 [验证记录](../VALIDATION.md)。
 
 当前原生适配器只接受已核对的 Nightly 160.0a1 英文控件结构。其他结构、语言或升级后无法识别时返回明确错误，不改用坐标点击。Nightly 原生面板的初始配置 `remote.experimental.dynamicstart.enabled=true` 属于已有浏览器准备；本工具不改 profile 或 about:config。
 

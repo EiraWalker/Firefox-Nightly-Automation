@@ -26,4 +26,25 @@ $policy=[ConsentFocusPolicy]::new(101)
 $policy.Begin(0,301,201)
 $policy.Complete(1,202)
 Check 'an unrelated final foreground is not adopted as the new baseline' $policy @(301) 202 $false
+$policy=[ConsentFocusPolicy]::new(101)
+$policy.BeginServiceStart(0,201)
+Check 'service start may activate the verified browser' $policy @(201) 201 $true
+Check 'service start rejects a different browser window' $policy @(202) 202 $false
+Check 'service start rejects an unrelated dialog' $policy @(301) 301 $false
+$script:checks+=@{name='service activation is not reported as consent-only';actual=$policy.AllowsConsentOnly(@(201),201);expected=$false}
+$policy.Complete(1,201)
+Check 'service start completion retains its activation' $policy @(201) 201 $true
+Check 'service completion does not permit later focus changes' $policy @(201,202) 202 $false
+$policy.Begin(1,301,201)
+Check 'consent can follow service start' $policy @(201,301,201) 201 $true
+Check 'consent cannot hide unrelated service-start events' $policy @(202,301) 301 $false
+$policy.Complete(3,201)
+Check 'completed service and consent remain valid' $policy @(201,301,201) 201 $true
+$policy=[ConsentFocusPolicy]::new(101)
+$policy.BeginServiceStart(1,201)
+Check 'service start cannot hide an earlier unrelated event' $policy @(202,201) 201 $false
+$policy=[ConsentFocusPolicy]::new(101)
+$policy.BeginServiceStart(0,201)
+$policy.Complete(1,202)
+Check 'service start cannot adopt an unrelated final foreground' $policy @(201) 202 $false
 ConvertTo-Json -InputObject $checks -Compress

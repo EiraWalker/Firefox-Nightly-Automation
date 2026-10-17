@@ -1,6 +1,6 @@
 ---
 name: firefox-nightly-automation
-description: 在 Windows 连接已有 Firefox Nightly 执行 Puppeteer 任务，或自动永久安装 XPI。安装扩展时默认使用此工作流；本次原生连接确认框自动批准，主窗口和服务面板保持后台。支持明确授权的会话重置。
+description: 在 Windows 连接已有 Firefox Nightly 执行 Puppeteer 任务，或自动永久安装 XPI。默认直接开启 Remote Control 并批准本次原生连接确认框。支持明确授权的会话重置。
 ---
 
 # Firefox Nightly automation
@@ -13,7 +13,7 @@ node -e "const fs=require('node:fs'),p=require('node:path');console.log(p.resolv
 
 核对根目录存在 `cli.mjs` 和 `package.json`，之后以其绝对路径调用。定义见工具根目录的 GLOSSARY.md；调用及实测边界见 README.md 和 VALIDATION.md。
 
-本工具默认自动批准本次连接自己的原生确认框，接受该确认框引起的激活；主窗口和 Remote Control 面板保持严格后台。执行连接前核对当前任务授权。连接授权不包含发送消息、安装扩展、写入存储等业务操作；仅计划或讨论时不实际连接。
+用户已授权本工具默认直接开启已有 Nightly 的 Remote Control，无需再次确认或要求用户手动开启。服务未开启时，直接执行 `run` 或 `start`；接受开启服务的原生工具栏、面板操作引起的目标主窗口激活。此例外仅覆盖开启服务的步骤，其他页面操作继续在后台执行。本次连接自己的原生确认框也默认自动批准，并接受该确认框引起的激活。连接授权不包含发送消息、安装扩展、写入存储等业务操作；仅计划或讨论时不实际连接。若用户在当前任务明确要求严格后台、不抢焦点，则以该要求为准；服务关闭时先报告无法满足，不触发开启步骤。
 
 先 `node '<入口>' status`。选择明确的已有 Nightly；多窗口时指定实际 HWND。不要启动替代浏览器、刷新现有页面或更改 Firefox profile。
 
@@ -29,8 +29,8 @@ node -e "const fs=require('node:fs'),p=require('node:path');console.log(p.resolv
 
 用户要求服务关闭重开时用 `restart --reset-existing --restart-service`。它通过原生面板后台关闭并重开 Remote Control，不重启浏览器进程；最小化或后台不可用时报告失败。只用连接元数据示例测试工具时：`run --task '<工具根目录>/examples/browser-status.mjs'`。
 
-当前 Nightly 160.0a1 的原生 Allow 会产生前台事件；这是本次连接确认框获准的默认行为，不扩展为主窗口激活许可。consentAutomationAvailable=true。只匹配 Nightly 中桌面顶层或浏览器直接子节点的原生确认框，并核对完整说明、Allow/Deny 和未勾选复选框；拒绝已有或多个确认框。始终不勾选记住决定、不关闭授权偏好、不使用坐标或 OS 键鼠。
+当前 Nightly 160.0a1 的原生 Allow 会产生前台事件；这属于本次连接确认框的默认许可，与开启服务的窗口激活例外分别检查。consentAutomationAvailable=true。只匹配 Nightly 中桌面顶层或浏览器直接子节点的原生确认框，并核对完整说明、Allow/Deny 和未勾选复选框；拒绝已有或多个确认框。始终不勾选记住决定、不关闭授权偏好、不使用坐标或 OS 键鼠。
 
-读取 JSON 的 `ok`、退出码、`handshake`、`consent.seen/invoked/closed` 和 `background`，不要把端口监听、Invoke 被调用、离线测试当成真实验收通过。foregroundStable 保留原始观察，foregroundWithinConsentPolicy 核对确认框焦点例外，consentFocusActive 在完成后应为 false。确认框之外的焦点变化，以及任何浏览器窗口位置/最小化、选中标签或剪贴板变化均失败；报告具体错误，不采用激活主窗口的回退。明确授权 reset 之外不关闭其他会话。
+读取 JSON 的 `ok`、退出码、`handshake`、`consent.seen/invoked/closed` 和 `background`，不要把端口监听、Invoke 被调用、离线测试当成真实验收通过。foregroundStable 保留原始观察；foregroundWithinControlPolicy 检查开启服务和本次确认框两种焦点例外，foregroundWithinConsentPolicy 只检查确认框例外。完成后 consentFocusActive 和 serviceStartFocusActive 应为 false。两种例外区间之外的焦点变化，以及任何浏览器窗口位置/最小化、选中标签或剪贴板变化均失败；报告具体错误。最小化或原生控件不可用时报告失败，不自行恢复窗口。明确授权 reset 之外不关闭其他会话。
 
 `F_DESKTOP_CHANGED` 表示观察到变化，无法确定一定来自工具；报告本次不干扰验收未通过，不强行恢复窗口。原始报告位于项目 `.local/runs/`，不收集无关网页正文或凭据。

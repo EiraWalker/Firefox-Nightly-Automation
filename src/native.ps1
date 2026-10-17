@@ -84,10 +84,13 @@ function Get-GuardReport {
         windowsStable=(($after.windows | ConvertTo-Json -Compress -Depth 5) -ceq ($baseline.windows | ConvertTo-Json -Compress -Depth 5))
         windowIdentityStable=(($after.windows.hwnd -join ':') -ceq ($baseline.windows.hwnd -join ':'))
         selectedTabsStable=(($after.windows | ForEach-Object { "$($_.hwnd)=$($_.selectedTab)" }) -join ',') -ceq (($baseline.windows | ForEach-Object { "$($_.hwnd)=$($_.selectedTab)" }) -join ',')
-        foregroundWithinConsentPolicy=$script:focusPolicy.Allows([long[]]@($events | ForEach-Object Window),[long]$after.foreground)
-        consentFocusActive=$script:focusPolicy.Active
+        foregroundWithinConsentPolicy=$script:focusPolicy.AllowsConsentOnly([long[]]@($events | ForEach-Object Window),[long]$after.foreground)
+        foregroundWithinControlPolicy=$script:focusPolicy.Allows([long[]]@($events | ForEach-Object Window),[long]$after.foreground)
+        consentFocusActive=($script:focusPolicy.Active -and -not $script:focusPolicy.ServiceStartActive)
+        serviceStartFocusActive=$script:focusPolicy.ServiceStartActive
         consentActivationDefault=$true
-        mainWindowActivationAllowed=$false
+        serviceStartActivationDefault=$true
+        mainWindowActivationAllowed=$script:focusPolicy.ServiceStartActive
         foregroundEventCount=$events.Count
         nightlyForegroundEventCount=@($events | Where-Object { $_.Process -eq $script:browserPid }).Count
         lastNativeAction=$script:lastNativeAction
@@ -96,7 +99,7 @@ function Get-GuardReport {
 }
 function Assert-Desktop {
     $report=Get-GuardReport
-    if(-not $report.clipboardStable -or -not $report.windowsStable -or -not $report.foregroundWithinConsentPolicy) { throw 'F_DESKTOP_CHANGED' }
+    if(-not $report.clipboardStable -or -not $report.windowsStable -or -not $report.foregroundWithinControlPolicy) { throw 'F_DESKTOP_CHANGED' }
 }
 function Begin-ConsentFocus($Dialog,[int]$EventIndex) {
     if($Dialog.Current.ClassName -ne 'MozillaDialogClass' -or $Dialog.Current.AutomationId -ne 'commonDialogWindow' -or $Dialog.Current.ProcessId -ne $script:browserPid) { throw 'F_CONSENT_SHAPE_UNKNOWN' }
@@ -165,36 +168,44 @@ function Set-Power([bool]$Enabled) {
     $root=Get-TargetRoot
     if($script:focusPolicy.Active) { throw 'F_CONSENT_NOT_CLOSED' }
     if([NightlyDesktop]::IsIconic([IntPtr]$root.Current.NativeWindowHandle)) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
-    # Nightly toolbar Invoke can activate its main window. Never attempt that
-    # known focus-changing path while another application is in the foreground.
-    if([NightlyDesktop]::GetForegroundWindow().ToInt64() -ne [long]$root.Current.NativeWindowHandle) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
+    # Starting Remote Control is pre-authorized, including activation caused by
+    # its native controls. Stopping still requires background-safe controls.
+    if(-not $Enabled -and [NightlyDesktop]::GetForegroundWindow().ToInt64() -ne [long]$root.Current.NativeWindowHandle) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
     Assert-Desktop
     $button=Get-ToolbarButton $root
     $expected=if($Enabled){'Remote control'}else{'Remote control (on)'}
     if($button.Current.Name -cne $expected) { throw 'F_REMOTE_CONTROL_STATE_CHANGED' }
-    $toggle=Find-PowerToggle
-    if(-not $toggle) {
-        $script:lastNativeAction='open-remote-panel'
-        Invoke-Native $button
-    }
-    $deadline=[DateTime]::UtcNow.AddSeconds(3)
-    $toggle=$null
-    do {
-        Assert-Desktop
-        # Only native top-level popup children are searched, never web documents.
+    if($Enabled) { $script:focusPolicy.BeginServiceStart(@([NightlyDesktop]::ForegroundEvents()).Count,[long]$root.Current.NativeWindowHandle) }
+    try {
         $toggle=Find-PowerToggle
-        if(-not $toggle) { Start-Sleep -Milliseconds 100 }
-    } while(-not $toggle -and [DateTime]::UtcNow -lt $deadline)
-    if(-not $toggle) { throw 'F_BACKGROUND_PANEL_UNAVAILABLE' }
-    $label=if($Enabled){'Turn on'}else{'Turn off'}
-    if($toggle.Current.Name -cne $label) { throw 'F_REMOTE_CONTROL_STATE_CHANGED' }
-    $script:lastNativeAction=if($Enabled){'turn-on'}else{'turn-off'}
-    Invoke-Native $toggle
-    if(Find-PowerToggle) {
-        $script:lastNativeAction='close-remote-panel'
-        Invoke-Native (Get-ToolbarButton (Get-TargetRoot))
+        if(-not $toggle) {
+            $script:lastNativeAction='open-remote-panel'
+            Invoke-Native $button
+        }
+        $deadline=[DateTime]::UtcNow.AddSeconds(3)
+        $toggle=$null
+        do {
+            Assert-Desktop
+            # Only native top-level popup children are searched, never web documents.
+            $toggle=Find-PowerToggle
+            if(-not $toggle) { Start-Sleep -Milliseconds 100 }
+        } while(-not $toggle -and [DateTime]::UtcNow -lt $deadline)
+        if(-not $toggle) { throw 'F_BACKGROUND_PANEL_UNAVAILABLE' }
+        $label=if($Enabled){'Turn on'}else{'Turn off'}
+        if($toggle.Current.Name -cne $label) { throw 'F_REMOTE_CONTROL_STATE_CHANGED' }
+        $script:lastNativeAction=if($Enabled){'turn-on'}else{'turn-off'}
+        Invoke-Native $toggle
+        if(Find-PowerToggle) {
+            $script:lastNativeAction='close-remote-panel'
+            Invoke-Native (Get-ToolbarButton (Get-TargetRoot))
+        }
+        return @{ requested=$Enabled }
+    } finally {
+        if($Enabled -and $script:focusPolicy.ServiceStartActive) {
+            $script:focusPolicy.Complete(@([NightlyDesktop]::ForegroundEvents()).Count,[NightlyDesktop]::GetForegroundWindow().ToInt64())
+            Assert-Desktop
+        }
     }
-    return @{ requested=$Enabled }
 }
 function Find-PowerToggle {
     $found=@()
