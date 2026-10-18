@@ -2,6 +2,20 @@
 
 [返回首页](../README.md)
 
+## 默认启动权限
+
+启动 Nightly 默认使用 `scripts/start-nightly.ps1`，为 Firefox 子进程设置 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`。本工具称其为 Agent full access；这是 Firefox Remote Agent 的 system access，用于已授权的浏览器内部页任务，不改变 Windows 账户权限或页面业务操作的授权范围。[Mozilla 定义](https://firefox-source-docs.mozilla.org/remote/Security.html#system-access)。
+
+```powershell
+pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '<工具根目录>/scripts/start-nightly.ps1'
+```
+
+启动器可传 `-ExecutablePath '<firefox.exe>'` 和 `-Arguments '<完整 Windows 命令行参数>'`；`-PassThru` 输出启动请求的进程 ID、路径和 requestedSystemAccess=true。这个收据仅证明带权限发起启动；已有 Firefox 接收启动请求时，不代表其进程环境已经改变。完整权限验收需在新启动的进程中实际访问目标内部页。
+
+任务栏快捷方式可将目标设为 PowerShell 7 的 `pwsh.exe`，本机优先使用稳定的应用执行别名，参数设为 `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "<工具根目录>\scripts\start-nightly.ps1"`，保留 Nightly 的图标与 AppUserModelID。修改前备份原始 `.lnk`。隐藏的是启动脚本窗口，Firefox 按正常方式打开。
+
+环境变量仅作用于新启动的 Firefox 子进程，不写入注册表或当前 PowerShell 环境。启动器不终止现有浏览器；若已有实例，Firefox 可能将请求转交给它，此时不会补上启动权限。正常退出后再从此入口打开，才能使新进程获得权限。`reset-session`、`restart` 和 Remote Control 服务开关都不改变已有浏览器的启动环境。
+
 ## 会话与命令
 
 - `status`：只读状态、端口所属进程、原生工具栏状态及本工具的服务归属。不会连接、点击或修改浏览器。
@@ -64,6 +78,8 @@ WinEventHook 连续记录前台切换。开启服务区间仅允许已核对目�
 
 ## 输出和失败处理
 
+后台专用窗口、导航超时后的就绪核验、可信输入与图像证据见[后台页面验收](background-acceptance.md)。
+
 stdout 输出 JSON，成功 `ok:true`、退出码 0；失败 `ok:false`、退出码 1。`handshake:true` 证明实际 Firefox BiDi 会话成功；`consent.invoked:true && consent.closed:true` 证明本次授权框已调用并关闭，不能仅凭端口或 Invoke 请求判断成功。
 
 运行报告与请求阶段轨迹保存到 `.local/runs/`，不保存任务返回的数据。服务归属绑定浏览器 PID、启动时间、可执行路径和 TCP 监听创建时间，手动关闭重开会使旧归属失效。操作锁覆盖整个调用，避免两个本工具 Agent 同时批准连接。
@@ -72,7 +88,8 @@ stdout 输出 JSON，成功 `ok:true`、退出码 0；失败 `ok:false`、退出
 
 | 错误 | 含义 |
 | --- | --- |
-| F_BACKGROUND_CONTROL_UNAVAILABLE | 开关或按钮最小化、不可见或不支持后台 Invoke |
+| F_BACKGROUND_CONTROL_UNAVAILABLE | 原生控件禁用、屏幕外或缺少 InvokePattern；已核对的本次 Allow 禁用时先在连接期限内等待 |
+| F_CONNECTION_TIMEOUT | 同一次连接未在期限内完成；检查 Allow 是否一直等待启用及握手状态 |
 | F_BACKGROUND_PANEL_UNAVAILABLE | 无法在后台取得原生面板 |
 | F_DESKTOP_CHANGED | 锁定后窗口、选中标签或未授权浏览器焦点变化，具体见 lastFailure.reasons |
 | F_DESKTOP_UNSTABLE | 连接准备阶段未取得连续稳定快照，尚未执行原生动作 |
@@ -88,6 +105,21 @@ stdout 输出 JSON，成功 `ok:true`、退出码 0；失败 `ok:false`、退出
 | F_TEMPORARY_ADDON_CONFLICT | 非预期临时副本出现在核验结果中；不自动卸载 |
 
 失败后先看 `nativeTrace` 与当前 `status`，不盲目重放点击。连接失败会关闭自有传输，并在能确定弹窗归属且后台检查通过时取消自有授权请求。无法确认的弹窗保留，不能点击其他请求。若进程被外部终止留下 `.local/operation.lock`，先核对记录的 PID 已退出再删除这一个锁文件；正常退出自动释放。不能因错误自动清空用户 profile 或关闭其他会话。
+
+### 原生控件诊断
+
+检查 `background.lastControlState` 和 `lastInvocationIssued`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `action` | 本次检查的原生动作名 |
+| `enabled` / `offscreen` | 调用前读取的控件启用与屏幕外状态 |
+| `invokeAvailable` | 是否取得 InvokePattern；null 表示尚未查询 |
+| `lastInvocationIssued` | 是否已向原生控件发出 Invoke；不代表确认框关闭或握手成功 |
+
+仅对已核对进程、结构、完整说明及未勾选记住决定的本次 Allow，`enabled=false && offscreen=false` 返回 `waitingFor=allow-enabled`，由同一次连接继续轮询。状态在最终调用边界重新读取，覆盖发现后又禁用的竞争；等待共享原有连接期限（默认 15 秒），不会重新建连或延长期限。其他原生控件禁用、任何控件屏幕外、缺少 InvokePattern 或确认范围变化仍失败。已发出的批准不重放。
+
+历史收据缺少 lastControlState 时，不能仅凭 F_BACKGROUND_CONTROL_UNAVAILABLE 断言是窗口最小化；先区分原生控件、连接握手与页面导航失败阶段。最终报告保留原始失败，即使某个业务步骤已经成功。
 
 ## 代码职责
 

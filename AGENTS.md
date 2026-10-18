@@ -4,6 +4,8 @@
 
 术语见 GLOSSARY.md。主窗口、Remote Control 面板和原生连接确认框是三个不同对象；涉及激活权限时必须区分。
 
+- 启动 Nightly 默认调用 `scripts/start-nightly.ps1`，只为 Firefox 子进程设置 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`（Agent full access）。当前已有浏览器仍按现有连接流程复用；调试重置不能补上启动权限。需要重新启动才能访问内部页时，执行范围以用户已有的正常退出重开授权为准。启动参数和快捷方式配置集中在 `docs/reference.md` 的“默认启动权限”。
+
 - 代码发现优先使用 codebase-memory-mcp，索引名 `firefox-nightly-automation`；索引缺失时先索引当前目录。PowerShell/C# 覆盖不足时可读取文件。
 - 默认直接开启已有 Nightly 的 Remote Control，无需另行确认；允许开启服务的原生控件操作引起目标主窗口激活。本次连接的原生确认框也默认允许激活并自动点击 Allow。页面任务及关闭服务继续遵守后台约束；最小化或原生控件不可用时报告失败，不自行恢复窗口。用户在当前任务明确要求严格后台时，以该要求为准。不得使用 OS 键鼠、剪贴板写入、重启 Firefox 或关闭浏览器作为回退。
 - 普通网页不能用作原生面板或授权框。只处理本工具这次连接产生的原生授权框，不勾选记住决定。普通任务不关闭其他连接；用户明确要求重置当前 Remote Control/调试会话时，才使用 `restart --reset-existing`。

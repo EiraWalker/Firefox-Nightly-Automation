@@ -1,6 +1,6 @@
 interface:
   display_name: "Firefox Nightly automation"
-  short_description: "自动永久安装 XPI 或后台连接 Nightly，默认批准本次原生确认框"
-  default_prompt: "使用 $firefox-nightly-automation 执行已授权的 Nightly 任务；安装扩展默认调用 install --xpi 永久安装并核验，批准本次原生确认框，主窗口和面板保持后台。"
+  short_description: "以 Agent full access 启动 Nightly，后台连接或永久安装 XPI"
+  default_prompt: "使用 $firefox-nightly-automation 执行已授权的 Nightly 任务；需要启动时默认使用 scripts/start-nightly.ps1 设置 system access，连接已有浏览器并自动批准本次原生确认框；扩展安装使用 install --xpi 永久安装并核验。"
 policy:
   allow_implicit_invocation: true

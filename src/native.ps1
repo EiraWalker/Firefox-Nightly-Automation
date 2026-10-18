@@ -25,6 +25,7 @@ $script:consentSeen=$false
 $script:consentDialogHandle=0
 $script:lastNativeAction=$null
 $script:lastInvocationIssued=$false
+$script:lastControlState=$null
 $script:consentMessage='An application wants to control this browser session. It can read the content of your tabs, access your saved data, and navigate to any website. Only allow this if you started the connection yourself and you trust both the application and this computer.'
 
 function Find-ById($Root,[string]$Id,[switch]$Children) {
@@ -118,6 +119,7 @@ function Get-GuardReport {
         nightlyForegroundEventCount=@($events | Where-Object { $_.Process -eq $script:browserPid }).Count
         lastNativeAction=$script:lastNativeAction
         lastInvocationIssued=$script:lastInvocationIssued
+        lastControlState=$script:lastControlState
     }
 }
 function Assert-Desktop([switch]$PassThru) {
@@ -203,16 +205,24 @@ function Get-Status {
         guard=(Get-GuardReport)
     }
 }
-function Invoke-Native($Element) {
+function Invoke-Native($Element,[switch]$WaitForEnabled) {
     $script:lastInvocationIssued=$false
     Assert-Desktop
-    if(-not $Element.Current.IsEnabled -or $Element.Current.IsOffscreen) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
+    $current=$Element.Current
+    $script:lastControlState=@{action=$script:lastNativeAction;enabled=$current.IsEnabled;offscreen=$current.IsOffscreen;invokeAvailable=$null}
+    if($current.IsOffscreen) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
+    if(-not $current.IsEnabled) {
+        if($WaitForEnabled) { return $false }
+        throw 'F_BACKGROUND_CONTROL_UNAVAILABLE'
+    }
     $pattern=$null
-    if(-not $Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
+    $script:lastControlState.invokeAvailable=$Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)
+    if(-not $script:lastControlState.invokeAvailable) { throw 'F_BACKGROUND_CONTROL_UNAVAILABLE' }
     $script:lastInvocationIssued=$true
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
     Start-Sleep -Milliseconds 120
     Assert-Desktop
+    if($WaitForEnabled) { return $true }
 }
 function Set-Power([bool]$Enabled) {
     Prepare-Desktop
@@ -313,7 +323,11 @@ function Poll-Consent {
     Begin-ConsentFocus $dialog $script:consentFocusStart
     Assert-Desktop
     $script:lastNativeAction='allow-own-consent'
-    Invoke-Native $allows[0]
+    # Read readiness at the invocation boundary: it can change after discovery.
+    # Only the verified current consent waits; ordinary native actions still fail.
+    if(-not (Invoke-Native $allows[0] -WaitForEnabled)) {
+        return @{ seen=$true; invoked=$false; closed=$false; waitingFor='allow-enabled' }
+    }
     $script:consentInvoked=$true
     $closed=(-not [NightlyDesktop]::IsWindow([IntPtr]$script:consentDialogHandle))
     if($closed) { Finish-ConsentFocus }

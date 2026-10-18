@@ -33,6 +33,7 @@ function Reset-Replay {
     $script:browserPid=42
     $script:lastNativeAction=$null
     $script:lastInvocationIssued=$false
+    $script:lastControlState=$null
     $script:focusPolicy=[ConsentFocusPolicy]::new(10)
     $script:samples=$null
     $script:sampleIndex=0

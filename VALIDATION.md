@@ -1,5 +1,21 @@
 # 验证记录
 
+## 测试能力归并（2026-10-18）
+
+本轮将默认启动器、原生 Allow 就绪修复和后台验收流程归入独立工具仓库。两个客户端 skill 入口仍联接唯一源目录；专用页面、profile、扩展地址、截图和分步业务收据保留在忽略的私有目录，未复制进 skill。复用步骤见 [后台页面验收](docs/background-acceptance.md)。
+
+**离线检查**：完整 Node/PowerShell fixture 测试 **116 项通过**，零失败、取消或跳过。原生确认回归从 AST 加载真实 Poll-Consent 与 Invoke-Native，只替换 UIA 运行时；六组检查覆盖禁用后启用且只批准一次、发现与调用间禁用、记住决定拒绝、屏幕外拒绝、缺少 InvokePattern 拒绝及普通原生动作禁用时仍失败，同时核对控件诊断字段。旧实现会在禁用 Allow 时以 F_BACKGROUND_CONTROL_UNAVAILABLE 失败。
+
+归并后另有 Python 会话重置 fixture **4 项通过**；src/tests/scripts 共 8 个 PowerShell 文件解析、skill 元数据、24 个本地文档链接及两个 skill 入口的真实路径/内容一致性检查通过。本次归并未重新连接或操作真实浏览器，以下真实证据来自前面的排查验收。
+
+**真实连接**：Nightly 160.0a1 已复现 Allow enabled=false、offscreen=false、lastInvocationIssued=false；另一次在控件发现后、最终调用前重新禁用。等待逻辑因此放在最终调用边界，仅已完整核对的本次 Allow 使用，仍共享原有连接期限、不重放批准。新增 background.lastControlState，区分禁用、屏幕外与缺少 InvokePattern；没有这些字段的历史失败无法追认具体条件。最小元数据任务与专用页面任务也各取得真实握手及完整 seen/invoked/closed，记住决定始终未勾选。
+
+**内部页权限**：旧进程曾明确拒绝扩展内部页导航。用户授权正常重开后，先检查未保存任务、加密验证会话备份，再正常关闭并经默认启动器打开。任务栏快捷方式已核对调用同一脚本，环境仅作用于 Firefox 子进程。新进程的管理页虽出现导航超时，但原 Page 的文档 complete、扩展 API 可用，并实际读取目标安装版本、启用状态、设置及源码哈希，内部页访问通过。
+
+**业务分步证据**：在自建 focused=false 的后台窗口完成专用会话，浏览器可信中键输入上下各移动 100 px，光标恢复与松键停止通过。系统窗口捕获只得到灰帧，未计为图像通过；另行查看实际页面截图后取得视觉证据。这是浏览器输入验收，未覆盖物理鼠标手感。
+
+**整次运行边界**：最后全局桌面守卫因原窗口、标签及焦点变化返回 F_DESKTOP_CHANGED，整次 run 不记为 passed。未重置锁定基线或重放业务任务；仅关闭自建窗口和管理页、断开自己的客户端，保留浏览器及原有服务。原始失败和分步证据保留在 `.local/`；是否已提交或发布以 Git 状态为准。
+
 ## 连接前稳定性误判修复（2026-10-18）
 
 当前工作区修复了三类误判：将 UIA Runtime ID 当作长期标签身份、用初始化快照约束尚未开始的连接准备，以及把用户复制内容视作失败。历史报告中的布尔值不够区分真实标签切换与控件重建，不能据此断言原始运行一定是用户切换了标签。
@@ -8,10 +24,10 @@
 - 标签使用 tab strip 内唯一 AutomationId，缺失或重复时比较选中位置；Runtime ID 保留为诊断字段。窗口逐字段、按 HWND 比较，不依赖 JSON 字段顺序。
 - 剪贴板序号继续原样报告，clipboardPolicy=observe-only；不读取或写入剪贴板内容，不因用户复制而终止。
 - lastFailure.reasons 保留实际触发项；一次 assert 返回其实际验证的同一份快照，减少重复读取和报告竞态。
-- 新回归先在旧实现复现 Runtime ID 和剪贴板误判，再覆盖实际 beginConsent/assert 分发、稳定采样、已锁定基线保护、真实窗口/标签变化、AutomationId 缺失/重复、外部应用及焦点区间。本次提交快照的完整 Node 回归 **113 项通过，零失败、取消或跳过**；Python TCP fixture **4 项通过**。PowerShell 解析和 skill 元数据校验通过。
+- 新回归先在旧实现复现 Runtime ID 和剪贴板误判，再覆盖实际 beginConsent/assert 分发、稳定采样、已锁定基线保护、真实窗口/标签变化、AutomationId 缺失/重复、外部应用及焦点区间。当前完整 Node 回归 **115 项通过，零失败、取消或跳过**；Python TCP fixture **4 项通过**。PowerShell 解析和 skill 元数据校验通过。
 - 已对当前 Nightly 运行只读原生窗口采样与准备检查，initialize/assert 均成功，guardLocked=true、lastFailure=null、lastInvocationIssued=false。未建立 BiDi 连接、读取页面、点击控件、重启浏览器或修改浏览器设置；完整连接与页面业务实测未在本次执行。
 
-skill 与项目操作规则已同步，两个安装入口仍为指向唯一源目录的 Junction。本节记录本次测试范围，提交与发布状态以 Git 历史为准。
+skill 与项目操作规则已同步，两个安装入口仍为指向唯一源目录的 Junction。本节是本机工作区验收，不代表已 Git 提交或公开发布。
 
 ## 默认连接授权与其他应用活动（2026-10-17）
 
@@ -59,3 +75,14 @@ skill 与项目操作规则已同步，两个安装入口仍为指向唯一源�
 - src 和 tests 下全部 PowerShell 文件语法解析通过；skill 元数据校验通过。
 - skill 经目录联接访问时，可通过真实路径解析找到同一工具根目录和 cli.mjs。
 - 公开快照排除私有运行资料；历史实测只保留上述脱敏结论。
+
+## 默认 Agent full access 启动与任务栏入口（2026-10-17）
+
+新增 `scripts/start-nightly.ps1`，默认仅为 Nightly 子进程设置 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`。技能、调用文档和任务栏快捷方式统一使用此入口。启动器沿用既有实例的正常启动行为，不自动退出或重启用户浏览器，也不向浏览器添加远程调试命令行参数。
+
+- Node 测试 84 项全部通过。新增集成检查实际运行 PowerShell 7 启动器和测试子进程，确认子进程变量为 1、父进程变量仍为 0、包含空格的参数完整传递；缺失可执行文件时失败。
+- 首次测试使用 Windows PowerShell 5，在 Node 隐藏子进程模式下连最小 Write-Output 命令也返回退出码 2、无输出；同样条件下 PowerShell 7 正常。最终启动流程统一使用项目原有依赖 PowerShell 7，不通过调整超时或忽略失败获得通过。
+- PowerShell 语法、skill 元数据和 git diff 空白检查通过。
+- 本机指定的任务栏 Nightly 快捷方式已备份并改为隐藏运行 PowerShell 7 启动器；重新读取确认启动路径、参数、Nightly 图标和原 AppUserModelID。用户和系统全局环境变量保持原值。
+- Codex 与 Skillshare 入口仍指向同一个技能源目录。原始快捷方式及修改前后的配置收据保存在忽略的 `.local/system-access-setup/`。
+- 本次没有重启当前 Nightly，也没有据此宣称其内部页权限已改变。下一次正常退出后通过新快捷方式启动，才会为新进程设置变量；新进程的真实内部页访问仍待该次启动后验收。

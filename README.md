@@ -18,6 +18,7 @@
 
 | 功能 | 行为 |
 | --- | --- |
+| 启动浏览器 | 默认为 Nightly 子进程设置 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`，支持已授权的内部页任务 |
 | 连接现有浏览器 | 通过 WebDriver BiDi 连接已有 Nightly，沿用当前登录状态 |
 | 执行 Agent 任务 | 接收 Puppeteer 任务模块，执行后断开自己的客户端 |
 | 管理调试服务 | 按归属启停 Remote Control，支持明确授权的会话重置 |
@@ -32,6 +33,9 @@ git clone https://github.com/EiraWalker/Firefox-Nightly-Automation.git
 Set-Location Firefox-Nightly-Automation
 npm ci --ignore-scripts --cache .local/npm-cache
 
+# 需要启动 Nightly 时，默认使用 Agent full access 启动器
+pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/start-nightly.ps1
+
 # 查看已有浏览器和服务状态
 node ./cli.mjs status
 
@@ -40,6 +44,8 @@ node ./cli.mjs run --task './examples/browser-status.mjs'
 ```
 
 默认浏览器路径为 `C:\Program Files\Firefox Nightly\firefox.exe`，BiDi 端点为 `ws://127.0.0.1:9222/session`。可通过 `--executable`、`--port` 调整；多窗口时用 `--hwnd` 指定状态检查得到的目标。
+
+启动器仅设置 Firefox 子进程的环境，不写入用户或系统全局环境变量。已运行的 Nightly 不会因再次调用启动器或重置调试会话而获得启动权限；需正常退出后通过启动器重新打开。启动器不会自动结束浏览器。任务栏快捷方式配置及验证边界见[默认启动权限](docs/reference.md#默认启动权限)。
 
 ## 常用命令
 
@@ -102,6 +108,8 @@ New-Item -ItemType Junction -Path $skillTarget -Target $skillSource
 默认直接开启 Remote Control，允许开启服务的原生控件操作引起目标主窗口激活，无需另行确认。本次连接对应的原生确认框也默认自动批准。页面任务和关闭服务保持后台；最小化或原生控件不可用时返回失败。当前任务明确要求严格后台时，以该要求为准。业务操作仍以当前任务授权为准。
 
 连接前自动取得稳定基线；UIA 控件 ID 重建和用户复制内容不再中止连接。锁定后真实的窗口、标签或未授权焦点变化仍会阻止操作，失败原因写入 `background.lastFailure.reasons`。JSON 字段与边界见[使用参考](docs/reference.md#连接前稳定性检查)，报告保存在已忽略的 `.local/runs/`。
+
+本次 Allow 暂未启用时，在同一次连接的期限内等待；原生调用状态见[控件诊断](docs/reference.md#原生控件诊断)。创建专用后台窗口、核验页面就绪、输入与截图时使用[后台验收流程](docs/background-acceptance.md)。
 
 ## 开发与许可
 
